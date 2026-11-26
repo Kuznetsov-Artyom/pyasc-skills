@@ -1,9 +1,13 @@
 # Implement reference: Vector (AIV) route
 
-Facts below were checked against installed `pyasc==1.1.1+g63ed594e.d20261122` in the
-supplied evaluation venv. Primary sources are `language/memory_ops.py`, `global_tensor.py`,
-`range.py`, `reduction_ops.py`, `shape_ops.py`, `unary_ops.py`, and
-`runtime/compiler.py`. Recheck the installed package when it changes.
+Facts carry provenance from the validated installed package (`pyasc-dev
+1.1.1.dev20261123081345`). Primary sources are `language/memory_ops.py`,
+`global_tensor.py`, `range.py`, `reduction_ops.py`, `shape_ops.py`, `unary_ops.py`,
+and `runtime/compiler.py`. Recheck the installed package when it changes.
+
+**Production support in this MVP is exactly `vector_add_fp16`**: `out = a + b` with
+fp16 contiguous 1-D tensors. Other Vector facts below are retained as candidate
+practice for later validation, not as supported production recipes.
 
 ## Route and GM ↔ UB data path
 
@@ -43,7 +47,7 @@ def elementwise(a_ptr: asctile.GlobalAddress, b_ptr: asctile.GlobalAddress,
     for t in asctile.range(asctile.block_idx(), tile_count, asctile.block_num(),
                            unroll_factor=uf):
         offset = t * tile
-        valid = min(tile, n - offset)  # JIT's min supports runtime scalar values
+        valid = min(tile, n - offset)  # installed JIT maps builtin min to PlainValue.min for scalars
         a = asctile.copy_in(a_gm, [offset], [tile], real_shape=[valid], pad_value=0)
         b = asctile.copy_in(b_gm, [offset], [tile], real_shape=[valid], pad_value=0)
         asctile.copy_out(a + b, out_gm, [offset], real_shape=[valid])
@@ -92,6 +96,9 @@ same loop count.
   validity around a guessed cache-entry count.
 
 ## Reduction, normalization, and shape correctness
+
+These are candidate-practice facts for future recipes, not a supported reduction or
+normalization implementation in this MVP.
 
 - Axis `reduce_sum` accepts int32/int64/fp32; scalar whole-tile sum accepts
   int64/fp16/fp32. Axis `reduce_max`/`reduce_min` accept int8/int16/int32/int64/fp16/

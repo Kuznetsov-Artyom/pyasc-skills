@@ -6,10 +6,16 @@ This file owns the composition after a Cube result must also undergo real Vector
 For `cube_vector`, load exactly `cube.md + cube-vector.md`; **never load the full
 `vector.md` playbook**. The Vector rules needed by the mix are included below.
 
-Facts were checked against installed `pyasc==1.1.1+g63ed594e.d20261122`, principally
+Facts carry provenance from the validated installed package (`pyasc-dev
+1.1.1.dev20261123081345`), principally
 `language/{memory_ops,prog_model_ops,binary_ops,unary_ops,shape_ops,utils}.py`,
-`runtime/compiler.py`, `interpreter/{function,operations}.py`, and the installed
-`libpyasc` CV-strategy diagnostics. Recheck them if the installed package changes.
+`runtime/compiler.py` and the installed CV-strategy diagnostics. Recheck them if the
+installed package changes.
+
+**Production support in this MVP is exactly `gemm_bias_relu_vector_fp16`** with
+manual `SplitByM` at `cv_ratio=2`. Other mix patterns, automatic `cv_strategy`,
+SplitByN, FullVec and carried-state material are candidate practice for later
+validation, not supported production recipes.
 
 ## Route invariant and output boundary
 
@@ -100,8 +106,10 @@ This is the controllable form and the recommended MVP form when a split tail sto
   unsplit choice at `cv_ratio=1`; at `cv_ratio=2`, do not mistake it for single-AIV
   selection or for disjoint ownership.
 
-### Automatic `with asctile.cv_strategy(split)`
+### Automatic `with asctile.cv_strategy(split)` — candidate practice only
 
+The following facts explain the platform contract and preserve real developer
+experience, but automatic CV is not a selectable production recipe in this MVP.
 The region accepts **only** `SplitByM` or `SplitByN` and is intended for `cv_ratio=2`.
 `FullVec*` and `JoinBy*` are not accepted as the region argument. Mark the L0C→UB copy and
 its dependent UB operations; the compiler splits the copy, propagates the split through
@@ -165,7 +173,7 @@ if m_sb < m:  # do not emit an empty store for a fully padded sub-block
 
 `real_shape` without `pad_value` on the UB bias load supplies zero padding, which is the
 additive identity. The Cube operand zero-padding rules remain those in `cube.md`; do not
-move `real_shape`/`pad_value` onto L1/L0A/L0B loads. Every output tile origin must be a
+move `real_shape`/`pad_value` onto BT/L1/L0A/L0B loads. Every output tile origin must be a
 real logical tile, and any sub-block whose origin is beyond M/N must not store. For
 `SplitByN`, apply the analogous independent clamp to each sub-block's column extent and
 guard an empty column half.
