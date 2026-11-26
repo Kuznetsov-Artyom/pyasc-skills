@@ -1,11 +1,15 @@
 # Implement reference: Cube route
 
-Facts below were checked against installed `pyasc==1.1.1+g63ed594e.d20261122` in the
-supplied evaluation venv. Primary sources are `language/binary_ops.py`,
+Facts carry provenance from the validated installed package (`pyasc-dev
+1.1.1.dev20261123081345`). Primary sources are `language/binary_ops.py`,
 `creation_ops.py`, `memory_ops.py`, `shape_ops.py`, `global_tensor.py`, `range.py`,
-`interpreter/operations.py`, `runtime/compiler.py`, and `asc/runtime/launcher.py`.
-Cube-transpose fusion restrictions were also checked against the installed
-`libpyasc` pass diagnostics. Recheck the installed package when it changes.
+`runtime/compiler.py`, and `asc/runtime/launcher.py`. Cube-transpose fusion
+restrictions were also checked against installed pass diagnostics. Recheck the
+installed package when it changes.
+
+**Production support in this MVP is exactly `gemm_fp16`**: canonical row-major fp16
+K-split GEMM with direct L0C→GM output. Other Cube facts are candidate practice for
+later validation, not additional supported production recipes.
 
 ## Cube memory model and legal data path
 
@@ -38,8 +42,8 @@ consumption with `Launcher.check_memory_overflow`. The C310 values are:
 | L0C | **262144** (256 KiB) | live fp32 accumulators/results |
 | BT | **4096** (4 KiB) | any Cube-side bias tiles |
 
-L0A and L0B each have a separate 64-KiB budget; do **not** add their footprints and
-compare the sum with one 64-KiB limit. L1 is 512 KiB and UB is 248 KiB, not interchangeable
+L0A and L0B each have a separate 64-KiB budget; do **not** pool their footprints into
+one 128-KiB limit. L1 is 512 KiB and UB is 248 KiB, not interchangeable
 "about 256/512 KiB" allowances.
 
 For initial sizing, a live `[r,c]` tile costs `r*c*itemsize` bytes in its own bank.
@@ -156,10 +160,11 @@ labels for the three placements, not installed AscTile enum values.
 When a different complete Cube brief does require transpose, use only a supported
 single-purpose fusion chain:
 
-- **L1 placement:** transpose the direct result of a GM→L1 load, then feed the
-  transpose to one copy targeting L0A or L0B. The loaded L1 tensor must have no
-  non-transpose consumer, and the transpose must have exactly one use for this fusion
-  chain. Do not add unrelated consumers or assume multiple destination copies fuse.
+- **L1 placement:** transpose the direct result of a GM→L1 load. The loaded L1 tensor
+  must have exactly one user — the transpose — and no other load consumer. The
+  transpose may feed one or more copy operations, provided every user is a copy to
+  the **same** L0 destination location. This is a candidate-practice note for later
+  transpose validation, not a selectable MVP recipe.
 - **L0 placement:** transpose the direct result of a local `copy` to L0A or L0B.
   Transpose on L0A/L0B is supported for copy results, not arbitrary resident tensors.
 - Cube transpose fusion is **2-D only**. The generic `copy_in`+single-use `transpose`
@@ -173,16 +178,18 @@ single-purpose fusion chain:
 
 ## Cube tail handling and direct output
 
-- `real_shape` and `pad_value` are **not supported on copy_in to L1, L0A, or L0B**.
+- `real_shape` and `pad_value` are **not supported on copy_in to BT, L1, L0A, or L0B**;
+  they are legal only on UB/Auto.
   Supplying `pad_value` alone does not bypass the restriction: the installed wrapper
   internally supplies `real_shape=shape`. This prohibition also applies to a direct
   GM→L0A/L0B load even though the compiler later splits it.
-- For the canonical GEMM tail family, use the plain GM→L1 `copy_in` shown above with
-  true GM descriptors and a static padded tile shape. The installed interpreter models
-  this unmasked load by clipping the GM region to the declared bounds and zero-filling
-  the remaining local elements. Thus M/N/K pad lanes contribute zero to the dot
-  product without an out-of-extent GM read. Do not replace this with a masked Cube
-  load, and do not assume arbitrary pad values are available on that path.
+- For the canonical GEMM tail family, use plain GM→L1 `copy_in` with true GM
+  descriptors and a static padded tile shape. On the validated Model path, the tail
+  GEMM with M=72, N=80, K=56 passed correctness with exact output extents and no
+  recorded illegal-DMA diagnostics. This is compiled/runtime Model evidence, not a
+  proof based on interpreter semantics and not an NPU guarantee. Do not replace this
+  with a masked Cube load, and do not claim arbitrary pad values are available on that
+  path. Only valid M/N output extents are stored.
 - Clamp only the **output store** with rank-2
   `real_shape=[min(base_m,M-m_off),min(base_n,N-n_off)]`. The runtime-scalar `.min`
   form avoids Python-only type reassignment in JIT tracing. `real_shape` must not

@@ -1,10 +1,14 @@
 # Verify reference: Cube-route checklist
 
 Apply this after the independent oracle and verification procedure are valid. API facts
-were checked against installed `pyasc==1.1.1+g63ed594e.d20261122`, principally
+carry provenance from the validated installed package (`pyasc-dev
+1.1.1.dev20261123081345`), principally
 `language/{binary_ops,creation_ops,memory_ops,shape_ops}.py`, `runtime/compiler.py`,
-`asc/runtime/launcher.py`, and the installed `libpyasc` Cube-transpose diagnostics.
-This checklist adds verification criteria, not implementation choices.
+`asc/runtime/launcher.py`, and installed Cube-transpose diagnostics. This checklist
+adds verification criteria, not implementation choices.
+
+The only published Cube acceptance template is `gemm_fp16`; transpose and other Cube
+material are candidate practice, not supported production coverage.
 
 ## Route, residency, and output checklist
 
@@ -76,13 +80,15 @@ This checklist adds verification criteria, not implementation choices.
 - [ ] GM descriptors and actual allocations agree on true logical A `[M,K]`, B `[K,N]`,
       and C `[M,N]` extents and strides. A padded allocation paired with an incompatible
       logical descriptor is not a valid tail mechanism.
-- [ ] No `copy_in` to **L1, L0A, or L0B** uses `real_shape` or `pad_value`, including a
+- [ ] No `copy_in` to **BT, L1, L0A, or L0B** uses `real_shape` or `pad_value`, including a
       direct GM→L0 load and a `pad_value`-only call. Do not accept source comments that
       claim masked Cube operands when the wrapper rejects them.
-- [ ] For the declared in-flight zero-pad family, plain GM→L1 loads use true descriptors
-      and static padded tiles; prove that only zero contributes for M/N/K tail lanes and
-      that each load origin belongs to a real logical tile. Do not infer input-read
-      safety from output guards or numerical correctness alone.
+- [ ] For the declared static-padded tail family, plain GM→L1 loads use true descriptors
+      and static padded tiles. On the validated Model path, use the tail GEMM's compiled/
+      runtime correctness and DMA evidence rather than interpreter semantics. Prove that
+      each load origin belongs to a real logical tile and that only valid M/N extents are
+      stored. Do not infer input-read safety from output guards or numerical correctness
+      alone, and do not generalize this Model evidence to NPU.
 - [ ] Every output `copy_out(real_shape=...)` has rank 2, does not exceed its local tile,
       and equals the exact valid M/N extent at that tile origin. Stores cannot write
       padded C lanes. Both required 64-byte output guards remain bit-identical, while
@@ -90,10 +96,11 @@ This checklist adds verification criteria, not implementation choices.
 - [ ] For the frozen no-transpose GEMM, any actual transpose is unjustified and must be
       reconciled with the brief and report. Design labels such as NONE/L1/L0 are not
       mistaken for installed API enums.
-- [ ] If the brief requires **L1 transpose fusion**, the transpose input is a direct
-      GM→L1 load result with no other load consumer; the transpose has exactly one
-      use, a copy to L0A/L0B. Extra consumers, multiple transpose users, or an
-      arbitrary resident L1 transpose are not accepted as the same supported pattern.
+- [ ] If a candidate-practice brief requires **L1 transpose fusion**, the transpose
+      input is a direct GM→L1 load result whose only user is the transpose. Transpose
+      users must all be copies to the **same** L0 destination; multiple same-location
+      copy users are legal. Arbitrary resident L1 transpose or mixed destinations are
+      not accepted as the same supported pattern. This is not a published MVP template.
 - [ ] If the brief requires **L0 transpose fusion**, the transpose input is the direct
       result of a copy to L0A/L0B. Cube fusion is 2-D only; the generic 2-D/3-D/4-D
       `copy_in`+transpose note does not broaden the Cube rule. Result shapes and all
@@ -122,6 +129,10 @@ for Verify to repair the candidate. A passing `assert_close` never erases a rout
 residency, out-of-bounds, or configuration violation.
 
 ## Defect routing
+
+Before routing any defect, apply Verify SKILL.md's cap gate: classify first, then check
+`local_strikes`, `structural_reissues`, and `uncertain_reductions`; a transition beyond
+its cap publishes `stopped` instead of an owner handoff.
 
 - **Local → Implement:** concrete tile/grid/offset/K-bound error, accumulator init/store
   placement, output clamp, per-bank overflow, option/report mismatch, or a locally

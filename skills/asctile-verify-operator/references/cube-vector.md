@@ -5,10 +5,13 @@ oracle and verification procedure are valid. For `cube_vector`, load exactly
 `cube.md + cube-vector.md + simulator.md`; **never load the full `vector.md` playbook**.
 This is an acceptance audit, not an implementation recipe.
 
-API expectations below were checked against installed
-`pyasc==1.1.1+g63ed594e.d20261122`, including `memory_ops.py`, `prog_model_ops.py`,
+API expectations below carry provenance from the validated installed package
+(`pyasc-dev 1.1.1.dev20261123081345`), including `memory_ops.py`, `prog_model_ops.py`,
 `runtime/compiler.py`, the CV-strategy pass diagnostics, and the interpreter's explicitly
 sequential sub-block model. Recheck the installed package if it changes.
+
+The only published mix acceptance template is `gemm_bias_relu_vector_fp16` with
+manual `SplitByM` at `cv_ratio=2`; other mechanisms are candidate practice.
 
 ## 1. Route and real-Vector-epilogue validity
 
@@ -89,7 +92,7 @@ Audit the actual source/lowered specialization, not merely option names.
       fp16/fp32 tile, including a column half.
 - [ ] Bias GM descriptors and loads stay within logical N. A tail UB load uses a valid
       origin/extent; zero padding (explicit or the installed `real_shape` default) is the
-      additive identity. No `real_shape`/`pad_value` appears on L1/L0A/L0B loads. The
+      additive identity. No `real_shape`/`pad_value` appears on BT/L1/L0A/L0B loads. The
       Cube in-flight zero-padding and true-extent proofs from `cube.md` remain intact.
 - [ ] The tail variant exercises the same real Vector epilogue as the primary variant;
       there is no primary-only Vector path with a Cube-only or host tail fallback. A CV
@@ -134,7 +137,10 @@ Audit the actual source/lowered specialization, not merely option names.
       guard, tick, and reproducibility evidence under `simulator.md`. Numerical success
       never erases a route, ownership, out-of-bounds, or stale-configuration defect.
 
-For a validly observed failure, preserve the reproducer and route ownership as follows:
+For a validly observed failure, first apply Verify SKILL.md's cap gate: classify the
+defect, then check `local_strikes`, `structural_reissues`, and `uncertain_reductions`; a
+transition beyond its cap publishes `stopped` instead of an owner handoff. After that,
+preserve the reproducer and route ownership as follows:
 
 - **Local → Implement:** a wrong half origin/extent, bias offset/broadcast, operation order,
   illegal local Split/Join shape, accidental `distrib` inside CV, double CV store offset,

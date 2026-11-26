@@ -1,9 +1,13 @@
 # Verify reference: Vector-route checklist
 
 Apply this after the independent oracle and verification procedure are valid. API facts
-were checked against installed `pyasc==1.1.1+g63ed594e.d20261122`, principally
-`language/memory_ops.py`, `runtime/compiler.py`, and `asc/runtime/launcher.py`. This
-checklist adds verification criteria, not new design choices.
+carry provenance from the validated installed package (`pyasc-dev
+1.1.1.dev20261123081345`), principally `language/memory_ops.py`,
+`runtime/compiler.py`, and `asc/runtime/launcher.py`. This checklist adds verification
+criteria, not new design choices.
+
+The only published Vector acceptance template is `vector_add_fp16`; other Vector
+material is candidate practice, not supported production coverage.
 
 ## Route and structural checklist
 
@@ -65,6 +69,10 @@ source is a reporting/submission defect, not permission for Verify to repair it.
 per variant even when variants legitimately share one compiled specialization.
 
 ## Defect routing
+
+Before routing any defect, apply Verify SKILL.md's cap gate: classify first, then check
+`local_strikes`, `structural_reissues`, and `uncertain_reductions`; a transition beyond
+its cap publishes `stopped` instead of an owner handoff.
 
 - **Local:** incorrect offset/grid/tile/unroll/option, missing valid extent or identity
   pad, UB overflow, rank/broadcast mistake, host oracle/input/guard/report bug, or other

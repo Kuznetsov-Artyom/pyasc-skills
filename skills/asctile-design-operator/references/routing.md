@@ -6,9 +6,11 @@ This reference holds the three things SKILL.md delegates here:
 2. the **design-brief schema** the brief must fill (step 4),
 3. the **targeted-question menu** for missing semantics (step 1).
 
-All API facts below are verified against the installed `asc.experimental.asctile`
-package in the evaluation venv (`pyasc==1.1.1+g63ed594e.d20261122`, Python 3.13.5).
-Where a fact has a single authoritative source, that source is named inline.
+API facts below are provenance from the validated installed package (`pyasc-dev`
+1.1.1.dev20261123081345). They are not a runtime version-equality gate. Re-derive the
+facts from the installed package when it changes; preflight records the actual
+versions and capabilities. Where a fact has a single authoritative source, that source
+is named inline.
 
 ## Route enum
 
@@ -22,6 +24,22 @@ The brief emits exactly one route:
 
 `cube_vector` never loads `vector.md`: the mix reference carries only the Vector delta
 the route needs.
+
+### Validated production templates
+
+Only these exact templates are selectable for a production brief in the current MVP:
+
+- `vector_add_fp16` — `out[i] = a[i] + b[i]`, fp16 contiguous 1-D;
+- `gemm_fp16` — row-major fp16 `C = A @ B`, canonical K-split direct output;
+- `gemm_bias_relu_vector_fp16` — fp16 `C = relu(A @ B + bias[j])`, Vector epilogue
+  in UB with manual `SplitByM` at `cv_ratio=2`.
+
+Other route vocabulary, structures and mechanisms are **candidate practice**, not
+production support. Real developer experience is preserved as such: it is not called
+false, but it must be applied and verified before promotion. A request outside the
+three templates produces `candidate_recipe` when such real experience exists, or
+`unsupported_in_current_iteration` when no applicable candidate exists. Neither is
+`infeasible` unless the installed platform/API actually contradicts the request.
 
 ## Route decision procedure
 
@@ -48,9 +66,11 @@ Notes:
   the Cube path: `matmul`/`matmul_acc` is the only AscTile mechanism for a dense
   K-reduction, and a Vector multiply-accumulate re-implementation is an implementation
   detail the spec is not asking for.
-- If the spec *explicitly* forbids the Cube unit for a contraction (unheard-of, but
-  possible), treat it as a missing-semantics case and ask a targeted question — do not
-  silently route `vector`.
+- If the spec *explicitly* forbids the Cube unit for a contraction, preserve that
+  constraint rather than turning it into a hardware question. Apply the normal support
+  boundary: use a validated recipe if one applies; otherwise use `candidate_recipe` when
+  real experience exists, or `unsupported_in_current_iteration`. Do not use `infeasible`
+  without a proven installed-API/platform contradiction.
 
 ### Test 2 — Is real Vector work required on the Cube result?
 
@@ -64,9 +84,10 @@ Cube side does not by itself force `cube_vector`:
   declares L0C). `relu(A @ B)` can therefore execute entirely on the Cube side —
   apply `relu` to the L0C accumulator immediately after `matmul`, `.to(dtype)`,
   direct `L0C→GM copy_out` — and that execution structure is the `cube` route.
-  Whether a spec gets that structure still depends on what it mandates: explicit
-  Cube-side allowance → `cube`; explicit Vector requirement → `cube_vector`;
-  ambiguous → unit-placement question (see boundary cases).
+  Whether a spec gets that structure depends on what it mandates: explicit
+  Cube-side allowance → `cube` if a validated Cube recipe exists; explicit Vector
+  requirement → `cube_vector`; otherwise apply the deterministic template default
+  or candidate/unsupported status. No unit-placement question is sent to the user.
 - Everything else elementwise (`add`, `sub`, `mul`, `maximum`, `exp`, `where`,
   `reduce_*`, `broadcast_to`, `.to` chains on a UB tile, …) is UB-only — it
   genuinely needs the AIV pipe and makes the route `cube_vector` when required
@@ -87,41 +108,36 @@ The spec forces `cube_vector` when:
 
 If Test 1 passed and mandated Vector-unit work exists → **`cube_vector`**.
 
-If Test 1 passed and no spec-mandated Vector-unit work exists → **`cube`**
-— **except** when the spec contains an epilogue but leaves its unit unstated:
-that is ambiguity about the route itself, not absence of Vector work, and it
-goes to the unit-placement targeted question (see boundary cases / question
-menu), never to a `cube` default.
+If Test 1 passed and no Vector work is required → **`cube`**. If the spec contains a
+fused epilogue but does not state its unit, Design uses the deterministic default:
+`cube_vector` for the published `gemm_bias_relu_vector_fp16` template. Other epilogues
+are candidate/unsupported according to the recipe registry; they are not a question
+about hardware for the user.
 
 Boundary cases:
 
 - **Cast-only is not an epilogue.** `C = (A @ B).to(fp16)` — a `.to(dtype)` on the L0C
   accumulator then `copy_out` direct to GM — is `cube`. The cast can run on the Cube
   core; no AIV work is needed.
-- **Lone `relu`: explicit Cube-side → `cube`; explicit Vector → `cube_vector`;
-  ambiguous → ask.** `relu` is L0C-fusible (see above), so `C = relu(A @ B)`
-  routes `cube` when the spec explicitly permits a Cube/L0C-side epilogue (e.g.
-  "apply relu on the L0C accumulator", "no Vector epilogue required", or "relu may
-  fuse wherever it can"). A spec that *explicitly requires the relu to execute on
-  the Vector unit* (as `gemm-bias-relu` does — its spec bans any implementation
-  "such that the Vector unit never executes the elementwise work") routes
-  `cube_vector`. If the spec contains the epilogue but is **ambiguous about which
-  unit** runs it, that is the unit-placement targeted question below — do not
-  resolve it by defaulting to `cube`.
+- **Lone `relu`:** `relu` is L0C-fusible, but a lone-relu GEMM is not one of the three
+  published templates. Do not silently turn it into a supported `cube` recipe. Treat
+  real experience as candidate practice; otherwise report
+  `unsupported_in_current_iteration`. An explicit Vector requirement is accepted by the
+  published `gemm_bias_relu_vector_fp16` template only when the full math matches
+  `relu(A @ B + bias)`.
 - **Cube-side bias is not a Vector epilogue.** `asctile.matmul` accepts a `bias`
   operand (1-D, `BT` location) and `zeros_acc` accepts `bias=` initialization; both
-  keep the add on the Cube path. If the spec *permits but does not require* the Vector
-  unit to do the add, `cube` is correct. If the spec explicitly requires the bias add
-  to run on the Vector unit, the route is `cube_vector`.
-- **No epilogue at all → `cube`; epilogue with unstated unit → ask.** A GEMM whose
-  spec has no fused elementwise math at all routes `cube` — do not invent a Vector
-  stage. A GEMM+epilogue spec that is silent on *which unit* runs the epilogue is
-  a **targeted-question** case (unit placement decides the route) — see the
-  question menu; never default such a spec to `cube`.
-- **Parallel-but-independent Vector work.** A spec that requires Vector work with no
-  data dependency on the Cube result inside the same kernel still routes
-  `cube_vector` — the deciding factor is shared-program Cube+AIV structure, not
-  strictly an "epilogue".
+  keep the add on the Cube path. That is platform knowledge, not a published template.
+  If the user explicitly requires Vector bias work and the math matches the published
+  template, use `cube_vector`; otherwise keep the candidate/unsupported distinction.
+- **No epilogue at all → `cube`; unstated epilogue unit → deterministic default.** A
+  GEMM with no fused elementwise math routes `cube`. For a spec matching
+  `relu(A @ B + bias)` without a unit restriction, Design chooses the published
+  `cube_vector` template and records the decision as `agent_decision`. No unit-placement
+  question is sent to the user.
+- **Parallel-but-independent Vector work.** This is platform/structure knowledge, not
+  one of the published templates. Preserve it as candidate practice rather than
+  promising an implementation path that has not been validated.
 
 ### Test 3 — Cube-side structural sanity (quick check)
 
@@ -137,7 +153,9 @@ Cube contraction on an unsupported dtype (e.g. int8 matmul) fails feasibility �
 No Cube contraction → the route is `vector` **if** the op is expressible through the
 Vector vocabulary: elementwise binary/unary ops, `reduce_*`, `softmax`/`layer_norm`/
 `rms_norm`, `broadcast_to`/`reshape`/`where`/`gather`/`transpose` (2-D UB), `copy_in`/
-`copy_out` through UB. That covers the vast majority of non-matmul ops.
+`copy_out` through UB. That vocabulary describes platform capability, not current MVP
+support: only `vector_add_fp16` is a validated production template. Everything else
+follows the candidate/unsupported status rules above.
 
 If the op cannot be expressed on either pipe (e.g. requires a data movement AscTile
 doesn't expose), it is a feasibility failure — `references/feasibility.md`, not a
@@ -164,6 +182,23 @@ deferral.
 ```markdown
 # Design brief — <task id>
 
+- task_id: <id>
+- brief_revision: <monotonic revision>
+- protocol_revision: asctile-model-v1
+- status: complete | candidate_recipe
+- route: vector | cube | cube_vector
+- template: vector_add_fp16 | gemm_fp16 | gemm_bias_relu_vector_fp16 | <candidate-specific>
+- artifact_file: vector_add.py | gemm.py | gemm_bias_relu.py | <candidate-specific>.py
+- kernel_symbol: vector_add | gemm | gemm_bias_relu | <candidate-specific>
+- launch_symbol: launch
+- main_symbol: main
+- next_stage: implement
+- supersedes: <previous brief revision or none>
+- local_strikes: 0
+- structural_reissues: 0
+- uncertain_reductions: 0
+- provenance: user | default | agent_decision | verified
+
 ## 1. Semantic contract
 - math: <exact formula, e.g. C[i,j] = relu( Σ_k A[i,k]·B[k,j] + bias[j] )>
 - tensors: <name → shape / dtype / layout / broadcast semantics for every input
@@ -173,21 +208,39 @@ deferral.
   outside [0,N) of any tensor">
 
 ## 2. Route
+Production only (`status=complete`):
 - route: vector | cube | cube_vector
+- template: vector_add_fp16 | gemm_fp16 | gemm_bias_relu_vector_fp16
+- artifact_file: vector_add.py | gemm.py | gemm_bias_relu.py
+- kernel_symbol: vector_add | gemm | gemm_bias_relu
+- launch_symbol: launch
+- main_symbol: main
 - evidence: <the spec clauses / decision-procedure tests that forced this route>
 
+Evaluation-only (`status=candidate_recipe`):
+- route: a route selected by the same decision procedure if applicable; otherwise
+  `unsupported_in_current_iteration` — never an unknown route
+- template: <candidate-specific name, not one of the three public templates>
+- artifact_file: <candidate-specific>.py
+- kernel_symbol: <candidate-specific>
+- launch_symbol: launch
+- main_symbol: main
+
 ## 3. Algorithm family
-<The structural skeleton, not the code. Pick exactly one.>
-- vector: flat elementwise slab | row-block reduce/normalize | per-element
-  index-driven | per-row accumulate | <other named pattern>
-- cube: K-split accumulate (zeros_acc + matmul_acc K loop) | single-shot matmul |
-  M/N-split | StreamK family
-- cube_vector: GEMM + Vector epilogue | Cube→Vector→Cube multi-phase | stateful/
-  loop-carried | multi-tile combine — plus the L0C→UB transfer mechanism:
-  `cv_strategy` region | manual `distrib=` on L0C↔UB copies (recommended —
-  engages both AIVs at `cv_ratio=2`) | `distrib=None` unsplit (legal at
-  `cv_ratio=1`; whole tile to the single vector context — valid but leaves the
-  second AIV unused, a performance choice not a validity one)
+<The structural skeleton, not the code. For `status=complete`, pick exactly one from
+the validated allowlist. For `status=candidate_recipe`, use the candidate-specific
+structure named by the candidate brief and keep it evaluation-only.>
+- `vector_add_fp16`: flat grid-stride elementwise addition with exact boundary extents.
+- `gemm_fp16`: canonical K-split accumulate (`zeros_acc` + `matmul_acc` K loop),
+  direct L0C→GM output and final fp16 cast.
+- `gemm_bias_relu_vector_fp16`: GEMM + Vector UB epilogue, manual `SplitByM`
+  on L0C→UB copies at `cv_ratio=2`, per-sub-block clamped stores.
+
+Other patterns (row reduce/normalize, per-element index-driven, per-row accumulate,
+M/N-split, StreamK, multi-phase, carried state, `SplitByN`, `FullVec*`,
+`cv_strategy`, unsplit) are retained only as **candidate practice**. They are not
+production-selectable until a later validation task proves them through the same
+Implement→Verify pipeline.
 
 ## 4. Structural dataflow and residency
 <Per tensor/result: where it lives and how it moves — the pipe, not the sizes.>
@@ -208,15 +261,16 @@ deferral.
 - cv_ratio: 1 | 2 — expressible anywhere but recommended only where Vector work
   exists: `cube_vector` defaults to 2 (engages both AIVs, halves UB tiles via the
   split), `vector`/`cube` stay 1
-- L0C→UB transfer mechanism and split axis: `cv_strategy(SplitByM|SplitByN)` |
-  manual `distrib=SplitByM|SplitByN` | `FullVec*` | `distrib=None` unsplit —
-  with the divisibility constraint the chosen split imposes (see §6 note;
-  `distrib=None`/`FullVec*` impose none)
+- L0C→UB transfer mechanism and split axis: **only for `cube_vector`**. For the published
+  MVP use manual `distrib=SplitByM` at `cv_ratio=2`; for `vector`/`cube` write
+  `not_applicable`, do not invent a distribution mechanism. Other mechanisms are
+  candidate practice only.
 - grid source: derived from tile counts at launch time (never a baked constant)
 
 ## 6. Tile family
 <Tile parameter NAMES and their constraints — never final values.>
-- vector: e.g. `tile` (ConstExpr, multiple of 32/itemsize), `uf`, live-tile count;
+- vector: e.g. `tile` (ConstExpr; 1-D copies have no alignment requirement, an aligned
+  tile is only a heuristic), `uf`, live-tile count;
 - cube: `m_L1, n_L1, k_L1, base_m, base_n, base_k` (all ConstExpr), accumulator
   dtype fp32; constraints e.g. `base_m % 2 == 0` iff SplitByM chosen,
   `base_n % 32 == 0` iff SplitByN, `base_m·base_n·4 ≤ 262144` (L0C capacity);
@@ -232,8 +286,9 @@ deferral.
 - e.g. clamped copies vs declared GM extents | copy_in real_shape + pad_value
   (identity where it enters math) | copy_out real_shape clamp |
   in-flight zero-pad on GM→L1 copy_in | per-sub-block real_shape on stores.
-- Note the platform constraint: real_shape is illegal on L1/L0A/L0B copy_in
-  (legal on UB/BT loads; verified in memory_ops.py).
+- Note the platform constraint: `real_shape` is legal only on **UB/Auto** loads.
+  It is illegal on BT as well as L1/L0A/L0B: the Python docstring's omission of BT is
+  misleading, while the installed IR verifier enforces UB/Auto (`LoadOp::verify`).
 
 ## 8. Feasibility verdict
 - verdict: feasible (a brief only ever says feasible; infeasible produces an
@@ -261,35 +316,43 @@ exact offsets, cache policy — flagged so Implement knows it owns them.>
 
 ## Targeted questions
 
-When a semantic fact is missing, ask **one** targeted question naming exactly the
-missing fact and why the brief cannot proceed without it. The menu — pick the closest,
-never ask about things the spec already answers:
+Questions are for missing **user semantics**, not hardware implementation. Ask only when
+the answer cannot be inferred from the request or an explicit MVP default. Use plain
+language, one fact per question, and do not emit a partial brief while a question is open.
 
 | Missing / ambiguous fact | Ask |
 |---|---|
-| dtype of any tensor | "What dtype is `<tensor>`? The brief cannot fix tolerance, residency sizing, or dtype support checks without it." |
-| layout / transpose | "Is `A`/`B` stored row-major `[M,K]`/`[K,N]`, or is a transpose flag expected? This changes the staging path, not just the formula." |
-| epilogue placement | "Must `+bias`/`relu`/`<op>` run on-device inside the same kernel, or may it be host-side / a second kernel? This alone decides `cube` vs `cube_vector`." |
-| epilogue unit placement | "The epilogue is fused on-device — must it execute on the **Vector unit** specifically, or may it stay on the Cube side? Both are expressible (`relu` is L0C-fusible via `support_loc=(UB, L0C)`; a bias add can fold into `matmul`/`zeros_acc(bias=…)` on BT), and the answer decides `cube` vs `cube_vector` — the brief cannot be emitted without it." |
-| Cube-side bias allowed? | "May the bias add use the Cube-side path (`matmul`/`zeros_acc` bias operand), or must the Vector unit execute it? If the Vector unit must do it, the route is `cube_vector`." |
-| broadcast semantics | "How does `<tensor>` broadcast — per-row, per-column, scalar? The residency plan and reference both depend on it." |
-| reduction axis | "Which axis is reduced and is `keep_dims` expected? This fixes the skeleton family and output shape." |
-| shape(s) | "What are the concrete shapes/variants? Structural choices (tile family, split axis) depend on the shape class even though final sizes are deferred." |
-| tolerance / reference | "What reference formula and tolerances define correctness? Design must fix them; 'close enough' is not a contract." |
-| accumulation precision | "Is fp32 accumulation mandatory, or is it an implementation choice as long as output meets the reference?" |
-| output overwrite/accumulate | "Does the output get overwritten, or accumulated into (`C += …`)? This changes whether `zeros_acc` init is legal." |
-| forbidden mechanisms | "Are any mechanisms explicitly disallowed (e.g. Cube-side bias fold, host precompute)? The route check enforces these, so they must be in the contract." |
+| dtype of a required tensor | "Which dtype should `<tensor>` use? This MVP currently publishes fp16 templates; dtype is needed for feasibility and correctness." |
+| concrete shape(s) | "What are the concrete shapes/variants? The tile family and boundary checks depend on them." |
+| mathematical semantics | "Which exact operation should be computed? The current request leaves `<operator>` ambiguous." |
+| layout / transpose | "Should tensors be contiguous row-major? If a transpose is intended, describe it explicitly; this MVP does not silently assume one." |
+| broadcast semantics | "How should `<tensor>` broadcast — per-row, per-column, or scalar? This affects the reference and output shape." |
+| reduction axis | "Which axis is reduced, and should the reduced dimension be kept? This changes the output shape." |
+| user-specific non-default correctness requirement, if and only if it is ambiguous | "Do you have a specific non-default correctness contract that you require? If not, the labelled MVP default is used and recorded, with no tolerance question." |
+| output overwrite/accumulate | "Should the output be overwritten, or accumulated into (`C += …`)? This changes accumulator initialization." |
 
-Rules for asking:
+Rules:
 
-- **One question, one fact.** Ask the smallest question that unblocks the brief;
-  batch only genuinely independent facts in one message.
-- **Never guess and record it later.** A guessed dtype or epilogue placement produces
-  a brief that is wrong in a way Implement cannot detect.
-- **Quote the spec.** Cite the exact sentence that is ambiguous so the user answers
-  the real gap, not a re-derivation.
-- **Questions suspend output.** Do not emit a partial brief while a question is
-  open; the brief is emitted once, complete.
+- **One question, one fact.** Batch only genuinely independent missing facts.
+- **Never guess and record it later.** A guessed dtype or semantic contract produces a
+  brief that Implement cannot detect as wrong.
+- **Quote the ambiguous sentence** when one exists; if a fact is simply absent, name the
+  missing field instead of inventing a quotation.
+- **Questions suspend output.** Emit `DESIGN_REPORT.md` with `needs_user_input`; no
+  partial brief is produced.
+- **Do not ask about Cube vs Vector, unit placement, tile sizes, `cv_ratio`,
+  `DistribMode`, `cv_strategy`, or other hardware details.** These belong to Design.
+
+## Candidate validation path
+
+An explicit user request to validate a candidate recipe creates a complete,
+revisioned **evaluation-only candidate brief** with `status=candidate_recipe`. It has
+math, shapes/dtypes, reference, variants, artifact identity and candidate provenance.
+It follows the same Implement → Verify ownership and defect rules as a production brief.
+
+Before authoritative Verify/acceptance passes, the candidate is not supported. Passing
+produces `promotion_evidence` for a future extension and does not silently add a fourth
+public template to this MVP. Failure follows the same defect/terminal lifecycle.
 
 ## Route-recheck on structural backtrack
 
